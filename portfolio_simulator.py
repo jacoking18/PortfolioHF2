@@ -2,7 +2,7 @@
 # ------------------------------------------------------------
 # CAPNOW — Multi-Portfolio Simulation Lab (Simplified UI + Per-Deal Actions)
 # One main workspace: create deals, jump in calendar, renew/default per deal inline.
-# Calendar engine: Mon–Fri collections. Waterfall: 60/40 until 60% ROI, then 25/75; +1.5% fee.
+# Calendar engine: Mon–Fri collections. Waterfall: 60/40 until 60% ROI, then 25/75; +1.5% fee (on profits).
 # Finalization section at bottom with investor payouts and save-runs scaffold.
 # ------------------------------------------------------------
 
@@ -25,10 +25,16 @@ st.set_page_config(page_title="CAPNOW – Portfolio Lab", page_icon="🧪", layo
 WEEKMASK = "Mon Tue Wed Thu Fri"
 BD = pd.offsets.CustomBusinessDay(weekmask=WEEKMASK)
 
-
 def add_biz_days(start: date, n: int) -> date:
     return (pd.Timestamp(start) + n * BD).date()
 
+def biz_days_between(d1: date, d2: date) -> int:
+    """Business days strictly after d1 up to and including d2 (Mon–Fri)."""
+    if d2 <= d1:
+        return 0
+    rng = pd.date_range(start=d1, end=d2, freq=BD)
+    # exclude start day so that at start date elapsed = 0
+    return max(0, len(rng) - 1)
 
 def dollars(x: float) -> str:
     try:
@@ -45,7 +51,7 @@ PRE_HURDLE_SPLIT_INV = 0.60
 PRE_HURDLE_SPLIT_CAP = 0.40
 POST_HURDLE_SPLIT_INV = 0.25
 POST_HURDLE_SPLIT_CAP = 0.75
-MGMT_FEE = 0.015
+MGMT_FEE = 0.015            # <-- applied to profits (not ending cash)
 MIN_TICKET = 5_000.0
 
 # ------------------------------------------------------------
@@ -123,7 +129,6 @@ if "saved_runs" not in ss:
 # ------------------------------------------------------------
 # Engine
 # ------------------------------------------------------------
-
 def launch_portfolio(p: Portfolio):
     if p.launched:
         return
@@ -135,14 +140,12 @@ def launch_portfolio(p: Portfolio):
     p.launched = True
     p.current_date = p.start_date
 
-
 def add_investor(p: Portfolio, name: str, email: str, commit: float):
     if commit < MIN_TICKET:
         st.warning("Min ticket is $5,000.")
         return
     # Always append (no upsert)
     p.investors.append(Investor(name, email, float(commit)))
-
 
 def add_deal(p: Portfolio, label: str, amount: float, factor: float, term_days: int, start_date_: date):
     if not p.launched:
@@ -165,10 +168,8 @@ def add_deal(p: Portfolio, label: str, amount: float, factor: float, term_days: 
     ss.next_deal_id += 1
     p.cash -= amount
 
-
 def _is_weekday(d: date) -> bool:
     return d.weekday() < 5
-
 
 def advance_to_date(p: Portfolio, target: date):
     if target < p.current_date:
@@ -194,7 +195,6 @@ def advance_to_date(p: Portfolio, target: date):
                 deal.completed = True
         p.current_date = d
 
-
 def mark_default(p: Portfolio, deal_id: int, on_date: Optional[date] = None):
     deal = next((x for x in p.deals if x.id == deal_id), None)
     if not deal or deal.completed:
@@ -203,7 +203,6 @@ def mark_default(p: Portfolio, deal_id: int, on_date: Optional[date] = None):
         advance_to_date(p, on_date)
     deal.defaulted = True
     deal.completed = True
-
 
 def renew_deal(p: Portfolio, deal_id: int, new_amount: float, new_factor: float, new_term_days: int, on_date: Optional[date] = None):
     deal = next((x for x in p.deals if x.id == deal_id), None)
@@ -243,7 +242,6 @@ def renew_deal(p: Portfolio, deal_id: int, new_amount: float, new_factor: float,
 # ------------------------------------------------------------
 # Metrics + Waterfall
 # ------------------------------------------------------------
-
 def cap_table(p: Portfolio) -> pd.DataFrame:
     if not p.investors:
         return pd.DataFrame(columns=["Name","Email","Commit","% Ownership"])
@@ -256,14 +254,12 @@ def cap_table(p: Portfolio) -> pd.DataFrame:
     } for i in p.investors]
     return pd.DataFrame(rows)
 
-
 def realized_profit(p: Portfolio) -> float:
     prof = 0.0
     for d in p.deals:
         principal_repaid = min(d.collected, d.amount)
         prof += max(0.0, d.collected - principal_repaid)
     return prof
-
 
 def outstanding_principal(p: Portfolio) -> float:
     out = 0.0
@@ -272,7 +268,6 @@ def outstanding_principal(p: Portfolio) -> float:
         out += max(0.0, d.amount - principal_repaid)
     return out
 
-
 def to_be_collected(p: Portfolio) -> float:
     rem = 0.0
     for d in p.deals:
@@ -280,7 +275,6 @@ def to_be_collected(p: Portfolio) -> float:
             continue
         rem += max(0.0, d.gross - d.collected)
     return rem
-
 
 def renewal_and_default_rates(p: Portfolio):
     total = len(p.deals)
@@ -297,7 +291,6 @@ def renewal_and_default_rates(p: Portfolio):
         defaulted / total,
         default_amt / total_amt if total_amt else 0.0,
     )
-
 
 def year_end_waterfall(p: Portfolio) -> Dict[str, float]:
     principal = p.target_capital
@@ -316,7 +309,8 @@ def year_end_waterfall(p: Portfolio) -> Dict[str, float]:
     inv_from_phase2 = remainder_pool * POST_HURDLE_SPLIT_INV
     cap_from_phase2 = remainder_pool * POST_HURDLE_SPLIT_CAP
 
-    mgmt_fee = MGMT_FEE * ending_cash
+    # Mgmt fee = 1.5% of PROFITS (not ending cash)
+    mgmt_fee = MGMT_FEE * cash_profits_after_skims
 
     investor_total = principal + inv_from_phase1 + inv_from_phase2 - mgmt_fee
     capnow_total = p.early_skim_accum + cap_from_phase1 + cap_from_phase2 + mgmt_fee
@@ -387,7 +381,6 @@ with st.sidebar.expander("Investors & Launch", expanded=True):
 # ------------------------------------------------------------
 # MAIN — Single Workspace (Deals + Calendar + Actions + KPIs)
 # ------------------------------------------------------------
-
 st.markdown(f"## Portfolio #{p.id}: {p.name}")
 
 # Top row: Date controls + quick moves
@@ -456,6 +449,9 @@ if p.deals:
         "completed": d.completed,
         "defaulted": d.defaulted,
         "renewed_from": d.renewed_from,
+        # NEW: progress metrics w.r.t. current sim date
+        "days_left": max(0, d.term_days - biz_days_between(d.start_date, min(p.current_date, d.end_date))),
+        "progress": f"{min(d.term_days, biz_days_between(d.start_date, min(p.current_date, d.end_date)))}/{d.term_days}",
     } for d in p.deals])
     show = df.copy()
     for c in ["amount","daily","gross","collected"]:
@@ -468,8 +464,13 @@ if p.deals:
         with st.container(border=True):
             a1, a2, a3, a4, a5, a6 = st.columns([3,2,2,2,1.5,1.5])
             with a1:
+                elapsed = min(d.term_days, biz_days_between(d.start_date, min(p.current_date, d.end_date)))
                 st.markdown(f"**#{d.id} — {d.label}**  ")
-                st.caption(f"Start: {d.start_date} · End: {d.end_date} · Collected: {dollars(d.collected)} / {dollars(d.gross)}")
+                st.caption(
+                    f"Start: {d.start_date} · End: {d.end_date} · "
+                    f"Collected: {dollars(d.collected)} / {dollars(d.gross)} · "
+                    f"Days: {elapsed}/{d.term_days}"
+                )
             with a2:
                 act_date = st.date_input("Action date", value=p.current_date, key=f"ad_{p.id}_{d.id}")
             with a3:
@@ -477,7 +478,11 @@ if p.deals:
                     mark_default(p, d.id, act_date)
                     st.toast(f"Deal #{d.id} defaulted on {act_date}")
             with a4:
-                rn_amount = st.number_input("Renew: new advance $", min_value=0.0, value=float(max(d.amount, d.gross - d.collected)), step=1000.0, key=f"rnamt_{p.id}_{d.id}")
+                rn_amount = st.number_input(
+                    "Renew: new advance $", min_value=0.0,
+                    value=float(max(d.amount, d.gross - d.collected)),
+                    step=1000.0, key=f"rnamt_{p.id}_{d.id}"
+                )
             with a5:
                 rn_factor = st.number_input("Factor", min_value=1.0, value=float(d.factor), step=0.01, format="%.2f", key=f"rnfac_{p.id}_{d.id}")
             with a6:
@@ -502,7 +507,7 @@ c1, c2, c3, c4 = st.columns(4)
 with c1: st.metric("Realized Profit (YTD)", dollars(wf["cash_profit_after_skims"]))
 with c2: st.metric("CapNow Early Skims (sum)", dollars(wf["early_skims"]))
 with c3: st.metric("CapNow Final Component", dollars(wf["phase1_cap"] + wf["phase2_cap"]))
-with c4: st.metric("Fees Collected (1.5%)", dollars(wf["mgmt_fee"]))
+with c4: st.metric("Fees Collected (1.5% of profits)", dollars(wf["mgmt_fee"]))
 
 c5, c6 = st.columns(2)
 with c5: st.metric("Investors' Total Distribution", dollars(wf["investor_total"]))
