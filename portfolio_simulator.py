@@ -357,50 +357,7 @@ def year_end_waterfall(p: Portfolio) -> Dict[str, float]:
     }
 
 # ------------------------------------------------------------
-# Sidebar — Portfolio + Investors (simple)
-# ------------------------------------------------------------
-
-with st.sidebar:
-    st.markdown("### 🆕 New Portfolio")
-    name = st.text_input("Name", value=f"Base {datetime.now().year}")
-    start = st.date_input("Start", value=date(datetime.now().year,1,1))
-    end = st.date_input("End", value=date(datetime.now().year+1,1,1))
-    target_capital = st.number_input("Target Capital $", value=100000.0, step=5000.0)
-    if st.button("Create"):
-        pid = ss.next_portfolio_id; ss.next_portfolio_id += 1
-        p = Portfolio(id=pid, name=name, start_date=start, end_date=end, target_capital=target_capital)
-        # preload default investors
-        defaults = [
-            ("Jacobo", "jacobo@example.com", 10000),
-            ("Albert", "albert@example.com", 15000),
-            ("Yosh", "yosh@example.com", 5000),
-            ("Mike", "mike@example.com", 20000),
-            ("Juli", "juli@example.com", 25000),
-            ("Joe", "joe@example.com", 10000),
-            ("Netty", "netty@example.com", 15000),
-        ]
-        for nm, em, amt in defaults:
-            p.investors.append(Investor(name=nm, email=em, commit=float(amt)))
-        p.cash = target_capital
-        ss.portfolios[pid] = p; ss.selected_pid = pid
-        st.success(f"Portfolio {name} created with default investors!")
-
-    if ss.selected_pid:
-        p = ss.portfolios[ss.selected_pid]
-        st.markdown(f"### Open: {p.name}")
-        # add more investors manually
-        in_name = st.text_input("Name")
-        in_email = st.text_input("Email")
-        in_amt = st.number_input("Commit $", min_value=0.0, step=5000.0)
-        if st.button("Add investor"):
-            if in_name and in_amt >= MIN_TICKET:
-                p.investors.append(Investor(name=in_name, email=in_email, commit=in_amt))
-                st.success("Investor added!")
-
-        if st.button("🚀 Launch"):
-            p.launched = True
-            p.cash = p.target_capital
-            st.success("Portfolio launched.")
+# Sidebar — New portfolio + Investors & Launch
 # ------------------------------------------------------------
 st.sidebar.header("🧪 Portfolio Lab")
 with st.sidebar.expander("New Portfolio", expanded=True):
@@ -414,7 +371,6 @@ with st.sidebar.expander("New Portfolio", expanded=True):
     if st.button("Create", use_container_width=True):
         pid = ss.next_portfolio_id
         ss.next_portfolio_id += 1
-        # create portfolio and prefill with default investors
         newp = Portfolio(id=pid, name=name, start_date=start_dt, end_date=end_dt, target_capital=target)
         newp.investors = [Investor(i["name"], i["email"], float(i["commit"])) for i in DEFAULT_INVESTORS]
         ss.portfolios[pid] = newp
@@ -432,7 +388,6 @@ if ss.selected_pid is None:
 p: Portfolio = ss.portfolios[ss.selected_pid]
 
 with st.sidebar.expander("Investors & Launch", expanded=True):
-    # Editable roster (modify defaults or add/remove)
     inv_df = pd.DataFrame([{"name": i.name, "email": i.email, "commit": i.commit} for i in p.investors])
     edited = st.data_editor(
         inv_df,
@@ -445,7 +400,6 @@ with st.sidebar.expander("Investors & Launch", expanded=True):
         },
         key=f"inv_editor_{p.id}"
     )
-    # Apply edits live
     p.investors = [Investor(str(r.get("name","")), str(r.get("email","")), float(r.get("commit") or 0.0)) for r in edited.to_dict(orient="records")]
 
     st.markdown("— or quick add —")
@@ -468,7 +422,7 @@ with st.sidebar.expander("Investors & Launch", expanded=True):
 
     if st.button("🚀 Launch", disabled=p.launched or sum(i.commit for i in p.investors) < p.target_capital):
         launch_portfolio(p)
-    st.caption(f"Cash: {dollars(p.cash)} · Early skims: {dollars(p.early_skim_accum)} · Date: {p.current_date}")} · Early skims: {dollars(p.early_skim_accum)} · Date: {p.current_date})} · Early skims: {dollars(p.early_skim_accum)} · Date: {p.current_date}")
+    st.caption(f"Cash: {dollars(p.cash)} · Early skims: {dollars(p.early_skim_accum)} · Date: {p.current_date}")
 
 # ------------------------------------------------------------
 # MAIN — Single Workspace (Deals + Calendar + Actions + KPIs)
@@ -539,7 +493,7 @@ if p.deals:
         "daily": d.daily,
         "gross": d.gross,
         "collected": d.collected,
-        # progress vs current sim date
+        # NEW: progress metrics vs current sim date
         "days_left": max(0, d.term_days - biz_days_between(d.start_date, min(p.current_date, d.end_date))),
         "progress": f"{min(d.term_days, biz_days_between(d.start_date, min(p.current_date, d.end_date)))}/{d.term_days}",
         "completed": d.completed,
