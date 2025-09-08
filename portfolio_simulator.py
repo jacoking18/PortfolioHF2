@@ -139,7 +139,56 @@ if "saved_runs" not in ss:
 # Metrics + Waterfall
 # ------------------------------------------------------------
 
-# ... [METRICS FUNCTIONS UNCHANGED] ...
+def year_end_waterfall(p: Portfolio) -> Dict[str, float]:
+    principal = p.target_capital
+    hurdle_amt = HURDLE_ROI * principal
+    ending_cash = p.cash
+    cash_profits_after_skims = 0.0
+    for d in p.deals:
+        collected = d.collected
+        principal_part = min(collected, d.amount)
+        profit_part = max(0.0, collected - principal_part)
+        cash_profits_after_skims += profit_part
+
+    # Phase 1: 60/40 until investors hit 60% ROI
+    gross_needed_for_hurdle = hurdle_amt / PRE_HURDLE_SPLIT_INV if PRE_HURDLE_SPLIT_INV > 0 else float("inf")
+    used_in_phase1 = min(cash_profits_after_skims, gross_needed_for_hurdle)
+    inv_from_phase1 = used_in_phase1 * PRE_HURDLE_SPLIT_INV
+    cap_from_phase1 = used_in_phase1 * PRE_HURDLE_SPLIT_CAP
+
+    # Phase 2: 25/75 on remainder
+    remainder_pool = max(0.0, cash_profits_after_skims - used_in_phase1)
+    inv_from_phase2 = remainder_pool * POST_HURDLE_SPLIT_INV
+    cap_from_phase2 = remainder_pool * POST_HURDLE_SPLIT_CAP
+
+    # Mgmt fee = 1.5% of profits (not ending cash)
+    mgmt_fee = MGMT_FEE * cash_profits_after_skims
+
+    investor_total = principal + inv_from_phase1 + inv_from_phase2 - mgmt_fee
+    capnow_total = p.early_skim_accum + cap_from_phase1 + cap_from_phase2 + mgmt_fee
+
+    return {
+        "principal": principal,
+        "hurdle": hurdle_amt,
+        "phase1_inv": inv_from_phase1,
+        "phase1_cap": cap_from_phase1,
+        "phase2_inv": inv_from_phase2,
+        "phase2_cap": cap_from_phase2,
+        "mgmt_fee": mgmt_fee,
+        "investor_total": investor_total,
+        "capnow_total": capnow_total,
+        "ending_cash": ending_cash,
+        "early_skims": p.early_skim_accum,
+        "cash_profit_after_skims": cash_profits_after_skims,
+    }
+
+# dummy function for renewal/default rates
+def renewal_and_default_rates(p: Portfolio):
+    if not p.deals:
+        return 0,0,0,0
+    renewals = sum(1 for d in p.deals if d.renewed_from)
+    defaults = sum(1 for d in p.deals if d.defaulted)
+    return renewals/len(p.deals),0.0,defaults/len(p.deals),0.0
 
 # ------------------------------------------------------------
 # Sidebar — Portfolio + Investors (simple)
@@ -186,39 +235,46 @@ st.markdown("## 📌 Finalize & Compare")
 
 final_tabs = st.tabs(["✅ Run / Finalize (this portfolio)", "📊 All Portfolio Runs (comparison)"])
 
+# pick current portfolio
+if ss.selected_pid and ss.selected_pid in ss.portfolios:
+    p = ss.portfolios[ss.selected_pid]
+else:
+    p = None
+
 # --- Tab 1: This portfolio finalize ---
 with final_tabs[0]:
-    wf = year_end_waterfall(p)
-
-    c1, c2, c3, c4 = st.columns(4)
-    with c1: st.metric("Realized Profit (YTD)", dollars(wf["cash_profit_after_skims"]))
-    with c2: st.metric("CapNow Early Skims (sum)", dollars(wf["early_skims"]))
-    with c3: st.metric("CapNow Final Component", dollars(wf["phase1_cap"] + wf["phase2_cap"]))
-    with c4: st.metric("Fees Collected (1.5% of profits)", dollars(wf["mgmt_fee"]))
-
-    c5, c6 = st.columns(2)
-    with c5: st.metric("Investors' Total Distribution", dollars(wf["investor_total"]))
-    with c6: st.metric("CapNow – All-in (incl. fees)", dollars(wf["capnow_total"]))
-
-    # Detailed payout table per investor
-    ct = cap_table(p)
-    if not ct.empty:
-        pay = ct.copy()
-        pay["Payout"] = pay["% Ownership"] * wf["investor_total"]
-        pay["ROI %"] = ((pay["Payout"] - pay["Commit"]) / pay["Commit"]) * 100.0
-        show = pay.copy()
-        show["Commit"] = show["Commit"].map(dollars)
-        show["% Ownership"] = (show["% Ownership"]*100).map(lambda v: f"{v:.2f}%")
-        show["Payout"] = show["Payout"].map(dollars)
-        show["ROI %"] = show["ROI %"].map(lambda v: f"{v:.2f}%")
-        st.dataframe(show, use_container_width=True)
+    if not p:
+        st.info("No portfolio selected.")
     else:
-        st.info("No investors yet.")
+        wf = year_end_waterfall(p)
 
-    if st.button("📌 Save snapshot to comparison", use_container_width=True):
-        snap = _snapshot_for_compare(p)
-        ss.saved_runs.setdefault("runs", []).append(snap)
-        st.success("Saved! Check the 'All Portfolio Runs' tab.")
+        c1, c2, c3, c4 = st.columns(4)
+        with c1: st.metric("Realized Profit (YTD)", dollars(wf["cash_profit_after_skims"]))
+        with c2: st.metric("CapNow Early Skims (sum)", dollars(wf["early_skims"]))
+        with c3: st.metric("CapNow Final Component", dollars(wf["phase1_cap"] + wf["phase2_cap"]))
+        with c4: st.metric("Fees Collected (1.5% of profits)", dollars(wf["mgmt_fee"]))
+
+        c5, c6 = st.columns(2)
+        with c5: st.metric("Investors' Total Distribution", dollars(wf["investor_total"]))
+        with c6: st.metric("CapNow – All-in (incl. fees)", dollars(wf["capnow_total"]))
+
+        # Detailed payout table per investor
+        # (dummy cap_table implementation)
+        if p.investors:
+            pay_rows = []
+            for inv in p.investors:
+                pct = inv.commit / p.target_capital if p.target_capital else 0.0
+                payout = pct * wf["investor_total"]
+                roi = ((payout - inv.commit) / inv.commit * 100.0) if inv.commit else 0.0
+                pay_rows.append({"Name":inv.name,"Email":inv.email,"Commit":dollars(inv.commit),"% Ownership":f"{pct*100:.2f}%","Payout":dollars(payout),"ROI %":f"{roi:.2f}%"})
+            st.dataframe(pd.DataFrame(pay_rows), use_container_width=True)
+        else:
+            st.info("No investors yet.")
+
+        if st.button("📌 Save snapshot to comparison", use_container_width=True):
+            snap = _snapshot_for_compare(p)
+            ss.saved_runs.setdefault("runs", []).append(snap)
+            st.success("Saved! Check the 'All Portfolio Runs' tab.")
 
 # --- Tab 2: Comparison table ---
 with final_tabs[1]:
