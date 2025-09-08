@@ -1,9 +1,9 @@
 # multi_portfolio_lab.py
 # ------------------------------------------------------------
-# CAPNOW — Multi-Portfolio Simulation Lab (Simplified UI)
-# One primary workspace focused on: creating deals + moving in calendar year.
-# Calendar engine = Mon–Fri collections. Renew/Default on any date.
-# Waterfall = 60/40 until investors hit 60% ROI, then 25/75; +1.5% fee on final cash.
+# CAPNOW — Multi-Portfolio Simulation Lab (Simplified UI + Per-Deal Actions)
+# One main workspace: create deals, jump in calendar, renew/default per deal inline.
+# Calendar engine: Mon–Fri collections. Waterfall: 60/40 until 60% ROI, then 25/75; +1.5% fee.
+# Finalization section at bottom with investor payouts and save-runs scaffold.
 # ------------------------------------------------------------
 
 from __future__ import annotations
@@ -117,6 +117,8 @@ if "next_deal_id" not in ss:
     ss.next_deal_id = 1
 if "selected_pid" not in ss:
     ss.selected_pid = None
+if "saved_runs" not in ss:
+    ss.saved_runs = {}
 
 # ------------------------------------------------------------
 # Engine
@@ -304,7 +306,6 @@ def year_end_waterfall(p: Portfolio) -> Dict[str, float]:
     cash_profits_after_skims = realized_profit(p)
 
     # Phase 1: 60/40 until investors hit 60% ROI
-    # Determine gross profits consumed to pay investors' 60% via 60/40 split
     gross_needed_for_hurdle = hurdle_amt / PRE_HURDLE_SPLIT_INV if PRE_HURDLE_SPLIT_INV > 0 else float("inf")
     used_in_phase1 = min(cash_profits_after_skims, gross_needed_for_hurdle)
     inv_from_phase1 = used_in_phase1 * PRE_HURDLE_SPLIT_INV
@@ -461,41 +462,63 @@ if p.deals:
         show[c] = show[c].map(dollars)
     st.dataframe(show, use_container_width=True, height=360)
 
-    # Action Center — quick checkmark style (select a deal, pick date, renew/default)
-    st.markdown("**Action Center**")
-    ac1, ac2, ac3, ac4 = st.columns([2,2,4,4])
-    with ac1:
-        deal_id_sel = st.number_input("Deal ID", min_value=1, step=1, value=int(df.id.iloc[-1]))
-    with ac2:
-        action_date = st.date_input("Action date", value=p.current_date, key=f"actdate_{p.id}")
-    with ac3:
-        do_default = st.checkbox("Default on date", value=False, key=f"def_{p.id}")
-        if do_default and st.button("Apply Default", key=f"apply_def_{p.id}"):
-            mark_default(p, int(deal_id_sel), action_date)
-            st.success("Default applied.")
-    with ac4:
-        do_renew = st.checkbox("Renew on date", value=False, key=f"ren_{p.id}")
-        rn_amount = st.number_input("New advance $", min_value=0.0, step=1000.0, key=f"rnamt_{p.id}")
-        rn_factor = st.number_input("New factor", min_value=1.0, value=1.40, step=0.01, format="%.2f", key=f"rnfac_{p.id}")
-        rn_term = st.number_input("New term (bdays)", min_value=1, value=90, step=1, key=f"rnterm_{p.id}")
-        if do_renew and st.button("Apply Renewal", key=f"apply_rn_{p.id}"):
-            renew_deal(p, int(deal_id_sel), rn_amount, rn_factor, rn_term, action_date)
-            st.success("Renewal applied.")
+    # Inline per-deal actions (simple, one row of controls per deal)
+    st.markdown("### Quick Actions per Deal")
+    for d in p.deals:
+        with st.container(border=True):
+            a1, a2, a3, a4, a5, a6 = st.columns([3,2,2,2,1.5,1.5])
+            with a1:
+                st.markdown(f"**#{d.id} — {d.label}**  ")
+                st.caption(f"Start: {d.start_date} · End: {d.end_date} · Collected: {dollars(d.collected)} / {dollars(d.gross)}")
+            with a2:
+                act_date = st.date_input("Action date", value=p.current_date, key=f"ad_{p.id}_{d.id}")
+            with a3:
+                if st.button("Default", key=f"defbtn_{p.id}_{d.id}"):
+                    mark_default(p, d.id, act_date)
+                    st.toast(f"Deal #{d.id} defaulted on {act_date}")
+            with a4:
+                rn_amount = st.number_input("Renew: new advance $", min_value=0.0, value=float(max(d.amount, d.gross - d.collected)), step=1000.0, key=f"rnamt_{p.id}_{d.id}")
+            with a5:
+                rn_factor = st.number_input("Factor", min_value=1.0, value=float(d.factor), step=0.01, format="%.2f", key=f"rnfac_{p.id}_{d.id}")
+            with a6:
+                rn_term = st.number_input("Term (bdays)", min_value=1, value=int(d.term_days), step=1, key=f"rnterm_{p.id}_{d.id}")
+            b1, b2 = st.columns([1,1])
+            with b1:
+                if st.button("Apply Renewal", key=f"rnbtn_{p.id}_{d.id}"):
+                    renew_deal(p, d.id, rn_amount, rn_factor, rn_term, act_date)
+                    st.toast(f"Deal #{d.id} renewed on {act_date}")
+            with b2:
+                st.write("")
 
-# Waterfall preview (always visible)
+# ------------------------------------------------------------
+# FINALIZATION — Run/Finalize Year
+# ------------------------------------------------------------
 st.markdown("---")
-st.markdown("### Year-End Waterfall (Preview)")
+st.markdown("## ✅ Run / Finalize Year")
+
 wf = year_end_waterfall(p)
-w1, w2, w3, w4 = st.columns(4)
-with w1: st.metric("Principal", dollars(wf["principal"]))
-with w2: st.metric("Hurdle (60%)", dollars(wf["hurdle"]))
-with w3: st.metric("Mgmt Fee (1.5%)", dollars(wf["mgmt_fee"]))
-with w4: st.metric("Ending Cash", dollars(wf["ending_cash"]))
-w5, w6, w7, w8 = st.columns(4)
-with w5: st.metric("Phase1 → Investors (60%)", dollars(wf["phase1_inv"]))
-with w6: st.metric("Phase1 → CAPNOW (40%)", dollars(wf["phase1_cap"]))
-with w7: st.metric("Phase2 → Investors (25%)", dollars(wf["phase2_inv"]))
-with w8: st.metric("Phase2 → CAPNOW (75%)", dollars(wf["phase2_cap"]))
-wx1, wx2 = st.columns(2)
-with wx1: st.metric("Investors — Total", dollars(wf["investor_total"]))
-with wx2: st.metric("CAPNOW — Total", dollars(wf["capnow_total"]))
+
+c1, c2, c3, c4 = st.columns(4)
+with c1: st.metric("Realized Profit (YTD)", dollars(wf["cash_profit_after_skims"]))
+with c2: st.metric("CapNow Early Skims (sum)", dollars(wf["early_skims"]))
+with c3: st.metric("CapNow Final Component", dollars(wf["phase1_cap"] + wf["phase2_cap"]))
+with c4: st.metric("Fees Collected (1.5%)", dollars(wf["mgmt_fee"]))
+
+c5, c6 = st.columns(2)
+with c5: st.metric("Investors' Total Distribution", dollars(wf["investor_total"]))
+with c6: st.metric("CapNow – All-in (incl. fees)", dollars(wf["capnow_total"]))
+
+# Detailed payout table per investor
+ct = cap_table(p)
+if not ct.empty:
+    pay = ct.copy()
+    pay["Payout"] = pay["% Ownership"] * wf["investor_total"]
+    pay["ROI %"] = ((pay["Payout"] - pay["Commit"]) / pay["Commit"]) * 100.0
+    show = pay.copy()
+    show["Commit"] = show["Commit"].map(dollars)
+    show["% Ownership"] = (show["% Ownership"]*100).map(lambda v: f"{v:.2f}%")
+    show["Payout"] = show["Payout"].map(dollars)
+    show["ROI %"] = show["ROI %"].map(lambda v: f"{v:.2f}%")
+    st.dataframe(show, use_container_width=True)
+else:
+    st.info("No investors yet.")
