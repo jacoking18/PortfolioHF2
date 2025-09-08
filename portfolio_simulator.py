@@ -468,7 +468,7 @@ with st.sidebar.expander("Investors & Launch", expanded=True):
 
     if st.button("🚀 Launch", disabled=p.launched or sum(i.commit for i in p.investors) < p.target_capital):
         launch_portfolio(p)
-    st.caption(f"Cash: {dollars(p.cash)} · Early skims: {dollars(p.early_skim_accum)} · Date: {p.current_date})} · Early skims: {dollars(p.early_skim_accum)} · Date: {p.current_date}")
+    st.caption(f"Cash: {dollars(p.cash)} · Early skims: {dollars(p.early_skim_accum)} · Date: {p.current_date}")} · Early skims: {dollars(p.early_skim_accum)} · Date: {p.current_date})} · Early skims: {dollars(p.early_skim_accum)} · Date: {p.current_date}")
 
 # ------------------------------------------------------------
 # MAIN — Single Workspace (Deals + Calendar + Actions + KPIs)
