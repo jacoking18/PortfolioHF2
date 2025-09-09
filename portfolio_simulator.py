@@ -281,17 +281,21 @@ def realized_profit(p: Portfolio) -> float:
 
 
 def outstanding_principal(p: Portfolio) -> float:
+    """Principal still at risk in *active* deals only (excludes completed/defaulted)."""
     out = 0.0
     for d in p.deals:
+        if d.completed or d.defaulted:
+            continue
         principal_repaid = min(d.collected, d.amount)
         out += max(0.0, d.amount - principal_repaid)
     return out
 
 
 def to_be_collected(p: Portfolio) -> float:
+    """Gross receivable yet to be collected from *active* (non-defaulted) deals."""
     rem = 0.0
     for d in p.deals:
-        if d.defaulted:
+        if d.completed or d.defaulted:
             continue
         rem += max(0.0, d.gross - d.collected)
     return rem
@@ -384,7 +388,6 @@ if ss.selected_pid is None:
 p: Portfolio = ss.portfolios[ss.selected_pid]
 
 with st.sidebar.expander("Investors & Launch", expanded=True):
-    # Always show portfolio window here
     st.caption(f"Window: {p.start_date} → {p.end_date} · Cash: {dollars(p.cash)} · Early skims: {dollars(p.early_skim_accum)} · Sim date: {p.current_date}")
 
     inv_df = pd.DataFrame([{"name": i.name, "email": i.email, "commit": i.commit} for i in p.investors])
@@ -425,7 +428,6 @@ with st.sidebar.expander("Investors & Launch", expanded=True):
 # TABS — Studio • Performance • Finalize & Compare
 # ------------------------------------------------------------
 st.markdown(f"## Portfolio #{p.id}: {p.name}")
-# Always-visible portfolio window
 se1, se2 = st.columns(2)
 with se1:
     st.metric("Start date", p.start_date.strftime("%Y-%m-%d"))
@@ -455,7 +457,6 @@ with studio_tab:
 
     st.markdown("---")
 
-    # Deal creator row
     cc1, cc2, cc3, cc4, cc5 = st.columns([2,2,2,2,2])
     with cc1:
         d_label = st.text_input("Label", value=f"Deal {ss.next_deal_id}", key=f"dlab_{p.id}")
@@ -471,12 +472,10 @@ with studio_tab:
     if st.button("Deploy Deal", key=f"deploy_{p.id}"):
         add_deal(p, d_label, d_amount, d_factor, d_term, d_start)
 
-    # Inline per-deal actions & main ledger table are shown in Performance tab to reduce clutter
     st.info("Use the **Performance** tab to manage renewals/defaults and see the live ledger.")
 
 # --- PERFORMANCE ---
 with perf_tab:
-    # KPIs
     k1, k2, k3, k4, k5 = st.columns(5)
     with k1: st.metric("Cash", dollars(p.cash))
     with k2: st.metric("Realized Profit", dollars(realized_profit(p)))
@@ -490,7 +489,6 @@ with perf_tab:
         f"Default rate: {df_cnt*100:.1f}% (count) · {df_amt*100:.1f}% ($-weighted)"
     )
 
-    # Ledger table with progress columns
     if p.deals:
         df = pd.DataFrame([{
             "id": d.id,
@@ -589,6 +587,22 @@ with finalize_tab:
     c5, c6 = st.columns(2)
     with c5: st.metric("Investors' Total Distribution", dollars(wf["investor_total"]))
     with c6: st.metric("CapNow – All-in (incl. fees)", dollars(wf["capnow_total"]))
+
+    # --- Waterfall Breakdown (explicit) ---
+    st.markdown("### 📊 Waterfall Breakdown")
+    used_phase1 = wf["phase1_inv"] + wf["phase1_cap"]
+    remainder_R = max(0.0, wf["cash_profit_after_skims"] - used_phase1)
+    breakdown = pd.DataFrame([
+        {"Item": "Investor principal back", "Amount": wf["principal"]},
+        {"Item": "Investor ROI 60% hurdle", "Amount": wf["hurdle"]},
+        {"Item": "Phase‑1 split used (60/40)", "Amount": used_phase1},
+        {"Item": "Remaining profits (R)", "Amount": remainder_R},
+        {"Item": "Investor share (25% of R)", "Amount": wf["phase2_inv"]},
+        {"Item": "CapNow share (75% of R)", "Amount": wf["phase2_cap"]},
+    ])
+    show_br = breakdown.copy()
+    show_br["Amount"] = show_br["Amount"].map(dollars)
+    st.dataframe(show_br, hide_index=True, use_container_width=True)
 
     ct = cap_table(p)
     if not ct.empty:
